@@ -55,7 +55,7 @@ class ProtBerQmean(pl.LightningModule):
         y_hat = self(input_ids, attention_mask)
         loss = self.loss(y_hat, y)
         self.log("val_loss", loss, prog_bar=True)
-        return loss # FROCIO
+        return loss 
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr)
