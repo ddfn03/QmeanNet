@@ -1,0 +1,12 @@
+wandb==0.24.0
+torch==2.9.1+cu126
+torchvision==0.24.1+cu126
+lightning==2.6.0
+torchmetrics==1.8.2
+jsonargparse[signatures]==4.41.0
+transformers==4.57.5
+scikit-learn==1.8.0
+pandas==2.3.3
+numpy==2.4.1
+pyarrow==22.0.0
+dask==2025.12.0
