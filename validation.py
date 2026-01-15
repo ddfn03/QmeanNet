@@ -1,8 +1,8 @@
 import torch
 
-from DataPreparation import denorm, qmin, qmax, df_train, df_val, df_test
-from ProtBerQmean import ProtBerQmean
-from QmeanDataModule import QmeanDataModule
+from data.data_preparation import df_train, df_val, df_test
+from model.protbert_qmean import ProtBerQmean
+from data.qmean_datamodule import QmeanDataModule
 
 dm = QmeanDataModule(df_train , df_val , df_test , batch_size=8 , max_len=240)
 dm.setup()
