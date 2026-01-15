@@ -15,7 +15,8 @@ wandb/
 .idea
 .vscode
 .zed
-config.yaml
+qmean_global_scores.csv
+qmean_global_scores.parquet
 
 # Results
 lightning_logs/
