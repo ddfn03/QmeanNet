@@ -1,62 +1,80 @@
+import lightning as pl
 import torch
 import torch.nn as nn
-import lightning as pl
-from transformers import  AutoModel
+from transformers import AutoModel
+
 
 class ProtBerQmean(pl.LightningModule):
-    def __init__(self, lr=1e-4):
+    def __init__(self, lr: float = 1e-4, weight_decay: float = 1e-2, model_name: str = 'Rostlab/prot_bert',
+                 freeze_bert: bool = True, dropout_rate: float = 0.1, n_regressor_layers: int = 1):
         super().__init__()
-        self.bert = AutoModel.from_pretrained('Rostlab/prot_bert')
+        self.bert = AutoModel.from_pretrained(model_name)
 
-        for p in self.bert.parameters():
-            p.requires_grad = False
+        self.freeze_bert = freeze_bert
+        if self.freeze_bert:
+            for p in self.bert.parameters():
+                p.requires_grad = False
+
         hidden_size = self.bert.config.hidden_size
 
-        #regression head per un solo ouput
-        self.regressor = nn.Sequential(
-            nn.Linear(hidden_size, hidden_size // 2),
-            nn.ReLU(),
-            nn.Dropout(0.1),
-            nn.Linear(hidden_size // 2, 1)
-        )
+        self.regressor = nn.Sequential()
 
-        #loss , usiamo MSE
+        for i in range(n_regressor_layers-1):
+            self.regressor.append(nn.Linear(hidden_size, hidden_size))
+            self.regressor.append(nn.ReLU())
+            self.regressor.append(nn.Dropout(dropout_rate))
+
+        self.regressor.append(nn.Linear(hidden_size, 1))
+        self.weight_decay = weight_decay
+        self.dropout_rate = dropout_rate
         self.loss = nn.MSELoss()
-
+        self.mae = torch.nn.L1Loss()
         self.lr = lr
 
+        self.save_hyperparameters()
 
-    def forward(self , input_ids , attention_mask):
-        #output di Pbert
-        out = self.bert(input_ids=input_ids , attention_mask=attention_mask)
-
+    def forward(self, input_ids, attention_mask):
+        # output di Pbert
+        out = self.bert(input_ids=input_ids, attention_mask=attention_mask)
         seq_embeddings = out.pooler_output
-
         pred = self.regressor(seq_embeddings).squeeze(-1)
 
-        pred = torch.tanh(pred) #valori fra -1 e 1
+        pred = torch.tanh(pred)  # valori fra -1 e 1
         return pred
 
-    def on_train_start(self):
-        self.bert.train()
-
     def training_step(self, batch, batch_idx):
-        if batch_idx == 0:
-            print("bert in train mode?", self.bert.training)
 
-        input_ids , attention_mask , y = batch
-        y_hat = self(input_ids , attention_mask)
-        loss = self.loss(y_hat , y)
-        self.log("train_loss" , loss , prog_bar=True)
+        input_ids, attention_mask, y = batch
+        y_hat = self(input_ids, attention_mask)
+        loss = self.loss(y_hat, y)
+        mae = self.mae(y_hat, y).item()
+        self.log_dict({"train/loss": loss, "train/mae": mae}, prog_bar=True)
         return loss
 
     def validation_step(self, batch, batch_idx):
         input_ids, attention_mask, y = batch
         y_hat = self(input_ids, attention_mask)
         loss = self.loss(y_hat, y)
-        self.log("val_loss", loss, prog_bar=True)
-        return loss 
+        mae = self.mae(y_hat, y).item()
+        self.log_dict({"val/loss": loss, "val/mae": mae}, prog_bar=True)
+        return loss
+
+    def test_step(self, batch, batch_idx):
+        input_ids, attention_mask, y = batch
+        y_hat = self(input_ids, attention_mask)
+        loss = self.loss(y_hat, y)
+        mae = self.mae(y_hat, y).item()
+        self.log_dict({"test/loss": loss, "test/mae": mae}, prog_bar=True)
+        return loss
+
 
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr)
-        return optimizer
+        optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr, weight_decay=self.weight_decay)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer=optimizer,
+                                                               T_max=self.trainer.estimated_stepping_batches)
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": {
+                "scheduler": scheduler
+            }
+        }

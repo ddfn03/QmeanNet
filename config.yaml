@@ -1,13 +1,83 @@
 # lightning.pytorch==2.6.0
-seed_everything: true
+seed_everything: 42
 trainer:
   accelerator: auto
   strategy: auto
   devices: auto
   num_nodes: 1
   precision: null
-  logger: null
-  callbacks: null
+  logger:
+    class_path: lightning.pytorch.loggers.WandbLogger
+    init_args:
+      name: qmean-net-bert-regressor
+      save_dir: .
+      version: null
+      offline: false
+      dir: null
+      id: null
+      anonymous: null
+      project: QmeanNet
+      log_model: false
+      experiment: null
+      prefix: ''
+      checkpoint_name: null
+      add_file_policy: mutable
+      entity: neurone-lab
+      notes: null
+      tags: null
+      config: null
+      config_exclude_keys: null
+      config_include_keys: null
+      allow_val_change: null
+      group: null
+      job_type: null
+      mode: null
+      force: null
+      reinit: null
+      resume: null
+      resume_from: null
+      fork_from: null
+      save_code: null
+      tensorboard: null
+      sync_tensorboard: null
+      monitor_gym: null
+      settings: null
+  callbacks:
+  - class_path: lightning.pytorch.callbacks.LearningRateMonitor
+    init_args:
+      logging_interval: epoch
+      log_momentum: false
+      log_weight_decay: false
+  - class_path: lightning.pytorch.callbacks.EarlyStopping
+    init_args:
+      monitor: val/loss
+      min_delta: 0.0
+      patience: 25
+      verbose: true
+      mode: min
+      strict: true
+      check_finite: true
+      stopping_threshold: null
+      divergence_threshold: null
+      check_on_train_epoch_end: false
+      log_rank_zero_only: false
+  - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+    init_args:
+      dirpath: _checkpoints
+      filename: qmean-net-bert-regressor-{epoch:02d}-{val_loss:.2f}
+      monitor: val/loss
+      verbose: true
+      save_last: null
+      save_top_k: 1
+      save_on_exception: false
+      save_weights_only: false
+      mode: min
+      auto_insert_metric_name: true
+      every_n_train_steps: null
+      train_time_interval: null
+      every_n_epochs: null
+      save_on_train_epoch_end: true
+      enable_version_counter: true
   fast_dev_run: false
   max_epochs: null
   min_epochs: null
@@ -44,14 +114,20 @@ trainer:
   model_registry: null
 model:
   lr: 0.0001
+  weight_decay: 0.01
+  model_name: Rostlab/prot_bert
+  freeze_bert: true
+  dropout_rate: 0.1
+  n_regressor_layers: 1
 data:
   train_path: _dataset/train.csv
   val_path: _dataset/val.csv
   test_path: _dataset/test.csv
   parquet_dir: _dataset/parquet_shards
-  batch_size: 4
+  batch_size: 256
   max_sequence_len: 512
   tokenizer: Rostlab/prot_bert
+  num_workers: 8
 optimizer: null
 lr_scheduler: null
 ckpt_path: null

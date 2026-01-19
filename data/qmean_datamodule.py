@@ -13,7 +13,8 @@ logger = logging.getLogger(__name__)
 class QmeanDataModule(pl.LightningDataModule):
     def __init__(self, train_path: str = "_dataset/train.csv", val_path: str = "_dataset/val.csv",
                  test_path: str = "_dataset/test.csv", parquet_dir: str = "_dataset/parquet_shards",
-                 batch_size: int = 4, max_sequence_len: int = 512, tokenizer: str = "Rostlab/prot_bert"):
+                 batch_size: int = 4, max_sequence_len: int = 512, tokenizer: str = "Rostlab/prot_bert",
+                 num_workers: int = 8):
         super().__init__()
         self.parquet_dir = parquet_dir
 
@@ -28,6 +29,7 @@ class QmeanDataModule(pl.LightningDataModule):
         self.batch_size = batch_size
         self.max_sequence_len = max_sequence_len
         self.tokenizer = AutoTokenizer.from_pretrained(tokenizer)
+        self.num_workers = num_workers
 
     def setup(self, stage: str):
         if stage == "fit":
@@ -52,12 +54,12 @@ class QmeanDataModule(pl.LightningDataModule):
 
     def train_dataloader(self):
         return DataLoader(self.train_ds, batch_size=self.batch_size,
-                          shuffle=True, collate_fn=self.collate_fn)
+                          shuffle=True, collate_fn=self.collate_fn, num_workers=self.num_workers)
 
     def val_dataloader(self):
         return DataLoader(self.val_ds, batch_size=self.batch_size,
-                          shuffle=False, collate_fn=self.collate_fn)
+                          shuffle=False, collate_fn=self.collate_fn, num_workers=self.num_workers)
 
     def test_dataloader(self):
         return DataLoader(self.test_ds, batch_size=self.batch_size,
-                          shuffle=False, collate_fn=self.collate_fn)
+                          shuffle=False, collate_fn=self.collate_fn, num_workers=self.num_workers)

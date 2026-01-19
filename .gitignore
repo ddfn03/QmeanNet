@@ -18,6 +18,7 @@ wandb/
 qmean_global_scores.csv
 qmean_global_scores.parquet
 _dataset
+_checkpoints
 
 # Results
 lightning_logs/

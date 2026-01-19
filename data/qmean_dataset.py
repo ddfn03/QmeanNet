@@ -58,7 +58,7 @@ class QmeanDataset(Dataset):
         # Extract row
         row = self._current_table.slice(row_idx, 1).to_pydict()
 
-        x = row["sequence"]
-        y = torch.tensor(row["avg_local_score"][0], dtype=torch.long)
+        x = row["sequence"][0]
+        y = torch.tensor(row["avg_local_score"][0])
 
         return x, y
