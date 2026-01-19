@@ -17,6 +17,7 @@ wandb/
 .zed
 qmean_global_scores.csv
 qmean_global_scores.parquet
+_dataset
 
 # Results
 lightning_logs/

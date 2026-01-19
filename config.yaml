@@ -45,14 +45,13 @@ trainer:
 model:
   lr: 0.0001
 data:
-  csv_path: qmean_global_scores.csv
-  parquet_dir: qmean_global_scores.parquet
+  train_path: _dataset/train.csv
+  val_path: _dataset/val.csv
+  test_path: _dataset/test.csv
+  parquet_dir: _dataset/parquet_shards
   batch_size: 4
   max_sequence_len: 512
-  train_split: 0.8
-  val_split: 0.1
-  test_split: 0.1
-  random_state: 42
+  tokenizer: Rostlab/prot_bert
 optimizer: null
 lr_scheduler: null
 ckpt_path: null
