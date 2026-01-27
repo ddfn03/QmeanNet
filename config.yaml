@@ -10,7 +10,7 @@ trainer:
     class_path: lightning.pytorch.loggers.WandbLogger
     init_args:
       name: qmean-net-bert-regressor
-      save_dir: .
+      save_dir: _checkpoints
       version: null
       offline: false
       dir: null
@@ -79,7 +79,7 @@ trainer:
       save_on_train_epoch_end: true
       enable_version_counter: true
   fast_dev_run: false
-  max_epochs: null
+  max_epochs: 100
   min_epochs: null
   max_steps: -1
   min_steps: null
@@ -109,16 +109,16 @@ trainer:
   plugins: null
   sync_batchnorm: false
   reload_dataloaders_every_n_epochs: 0
-  default_root_dir: null
+  default_root_dir: _checkpoints
   enable_autolog_hparams: true
   model_registry: null
 model:
-  lr: 0.0001
-  weight_decay: 0.01
+  lr: 0.004737662157317785
+  weight_decay: 0.09877441975386328
   model_name: Rostlab/prot_bert
   freeze_bert: true
-  dropout_rate: 0.1
-  n_regressor_layers: 1
+  dropout_rate: 0.5
+  n_regressor_layers: 4
 data:
   train_path: _dataset/train.csv
   val_path: _dataset/val.csv

@@ -1,5 +1,5 @@
 import torch
-
+import wandb
 from lightning.pytorch.cli import LightningCLI
 from lightning.pytorch.loggers import WandbLogger
 from lightning.pytorch.utilities.rank_zero import rank_zero_only
@@ -31,8 +31,10 @@ from data.qmean_datamodule import QmeanDataModule
 
 if __name__ == "__main__":
     torch.set_float32_matmul_precision('high')
-    LightningCLI(
-        model_class=ProtBerQmean,
-        datamodule_class=QmeanDataModule,
-        save_config_kwargs={"overwrite": True},
-    )
+
+    with wandb.init(entity="neurone-lab", project="QmeanNet", id="xegwdar0",  resume="must") as run:
+        LightningCLI(
+            model_class=ProtBerQmean,
+            datamodule_class=QmeanDataModule,
+            save_config_kwargs={"overwrite": True},
+        )

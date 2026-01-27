@@ -16,6 +16,7 @@ wandb/
 .vscode
 .zed
 qmean_global_scores.csv
+qmean_global_scores_clean.csv
 qmean_global_scores.parquet
 _dataset
 _checkpoints

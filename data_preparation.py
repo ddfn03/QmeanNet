@@ -7,12 +7,12 @@ from sklearn.model_selection import train_test_split
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Split train/val/test")
-    parser.add_argument("--test-size", type=float, default=0.1, help="Quota per il test set (0-1)")
-    parser.add_argument("--val-size", type=float, default=0.1, help="Quota per il validation set (0-1, sul totale)")
-    parser.add_argument("--train-size", type=float, default=0.8, help="Quota per il train set (0-1, sul totale)")
+    parser.add_argument("--test-size", type=float, default=0.1, help="Values for the test set (0-1, of total)")
+    parser.add_argument("--val-size", type=float, default=0.1, help="Values for the val set (0-1, of total))")
+    parser.add_argument("--train-size", type=float, default=0.8, help="Values for the train set (0-1, of total))")
     parser.add_argument("--output-split-dir", type=str, default="_dataset", help="Path to directory containing the train, val and test csv")
     parser.add_argument("--csv-path", type=str, default="qmean_global_scores.csv", help="Path to the input CSV file")
-    parser.add_argument("--random-state", type=int, default=42, help="Seed per la riproducibilità")
+    parser.add_argument("--random-state", type=int, default=42, help="Seed for random splitting")
     return parser.parse_args()
 
 
