@@ -23,6 +23,8 @@ _checkpoints
 
 # Results
 lightning_logs/
+_qmean_scores/
+parquet_shards/
 
 
 
