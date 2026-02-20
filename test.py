@@ -34,41 +34,51 @@ def test(args):
     dataloader = datamodule.test_dataloader()
 
     os.makedirs(args.scores_dir, exist_ok=True)
-    fold_csv_dir = os.path.join(args.scorse_dir, f"predictions")
-
-    os.makedirs(fold_csv_dir, exist_ok=True)
-
-    fold_csv_path = os.path.join(fold_csv_dir, f"fold_{model_name}.csv")
-
-    global_scores = {}
-
-    for batch_idx, batch in enumerate(tqdm(dataloader, desc="Processing Batches")):
-        input_ids, attention_mask, y = batch
-
-        input_ids = input_ids.to(device=model.device)
-        attention_mask = attention_mask.to(device=model.device)
-        y = y.to(device=model.device)
-
-        with torch.no_grad():
-            y_hat = model(input_ids, attention_mask)
-
-        mae = torch.nn.functional.l1_loss(y_hat, y).item()
-
-        global_scores["mae"] = mae
-
-
     scores_path = os.path.join(args.scores_dir, args.scores_file)
     file_exists = os.path.exists(scores_path)
 
+    fieldnames =["model", "protein_name", "pred", "qmean" ,"mae"]
 
-    global_scores = {"model": model_name, **global_scores}
+    with open(scores_path, "a", newline="") as f_scores:
+        writer_scores = csv.DictWriter(f_scores, fieldnames=fieldnames)
 
-    with open(scores_path, "a", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=global_scores.keys())
         if not file_exists:
-            writer.writeheader()
-        writer.writerow(global_scores)
+            writer_scores.writeheader()
 
+        for batch_idx, batch in enumerate(tqdm(dataloader, desc="Processing Batches")):
+            input_ids, attention_mask, y , names= batch # noqa
+
+            input_ids = input_ids.to(device=model.device)
+            attention_mask = attention_mask.to(device=model.device)
+            y = y.to(device=model.device)
+
+            with torch.no_grad():
+                y_hat = model(input_ids, attention_mask)
+
+            batch_size = y.size(0)
+            for i in range(batch_size):
+                pred = y_hat[i].item()
+                true = y[i].item()
+
+                n = names[i]
+                if isinstance(n, torch.Tensor):
+                    try:
+                        prot_name = str(n.item())
+                    except Exception: # noqa
+                        prot_name = str(n.tolist())
+                elif isinstance(n, (bytes, bytearray)):
+                    prot_name = n.decode("utf-8", errors="replace")
+                else:
+                    prot_name = str(n)
+
+                row = {
+                    "protein_name": prot_name,
+                    "pred": float(pred),
+                    "qmean": float(true),
+                    "mae": torch.nn.functional.l1_loss(y_hat[i], y[i]).item(),
+                    "model": model_name
+                }
+                writer_scores.writerow(row)
 
 if __name__ == "__main__":
     parser = ArgumentParser()

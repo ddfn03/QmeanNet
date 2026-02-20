@@ -113,12 +113,12 @@ trainer:
   enable_autolog_hparams: true
   model_registry: null
 model:
-  lr: 0.004737662157317785
-  weight_decay: 0.09877441975386328
+  lr: 0.009017253323217707
+  weight_decay: 0.014853362987892188
   model_name: Rostlab/prot_bert
   freeze_bert: true
   dropout_rate: 0.5
-  n_regressor_layers: 4
+  n_regressor_layers: 2
 data:
   train_path: _dataset/train.csv
   val_path: _dataset/val.csv

@@ -1,3 +1,5 @@
+from typing import Literal
+
 import lightning as pl
 import torch
 import torch.nn as nn
@@ -42,31 +44,22 @@ class ProtBerQmean(pl.LightningModule):
         pred = torch.tanh(pred)  # valori fra -1 e 1
         return pred
 
-    def training_step(self, batch, batch_idx):
-
-        input_ids, attention_mask, y = batch
+    def _common_step(self, batch, prefix: Literal["train", "val", "test"]):
+        input_ids, attention_mask, y, _ = batch
         y_hat = self(input_ids, attention_mask)
         loss = self.loss(y_hat, y)
         mae = self.mae(y_hat, y).item()
-        self.log_dict({"train/loss": loss, "train/mae": mae}, prog_bar=True)
+        self.log_dict({f"{prefix}/loss": loss, f"{prefix}/mae": mae}, prog_bar=True, batch_size=input_ids.shape[0])
         return loss
+
+    def training_step(self, batch, batch_idx):
+        return self._common_step(batch, prefix="train")
 
     def validation_step(self, batch, batch_idx):
-        input_ids, attention_mask, y = batch
-        y_hat = self(input_ids, attention_mask)
-        loss = self.loss(y_hat, y)
-        mae = self.mae(y_hat, y).item()
-        self.log_dict({"val/loss": loss, "val/mae": mae}, prog_bar=True)
-        return loss
+        return self._common_step(batch, prefix="val")
 
     def test_step(self, batch, batch_idx):
-        input_ids, attention_mask, y = batch
-        y_hat = self(input_ids, attention_mask)
-        loss = self.loss(y_hat, y)
-        mae = self.mae(y_hat, y).item()
-        self.log_dict({"test/loss": loss, "test/mae": mae}, prog_bar=True)
-        return loss
-
+        return self._common_step(batch, prefix="test")
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr, weight_decay=self.weight_decay)
@@ -75,6 +68,7 @@ class ProtBerQmean(pl.LightningModule):
         return {
             "optimizer": optimizer,
             "lr_scheduler": {
-                "scheduler": scheduler
+                "scheduler": scheduler,
+                 "monitor": "val/loss",
             }
         }

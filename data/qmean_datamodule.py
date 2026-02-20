@@ -1,4 +1,6 @@
 import logging
+from os import name
+from typing import Iterable, Optional, List
 
 import lightning as pl
 import torch
@@ -38,8 +40,29 @@ class QmeanDataModule(pl.LightningDataModule):
         else:
             self.test_ds = QmeanDataset(self.test_path, self.parquet_dir + "/test")
 
+    def _normalize_names(self , names: Iterable, fallback_prefix: Optional[str] = "unknown") -> List[str]:
+        out: List[str] = []
+        for i, n in enumerate(names):
+            try:
+                if isinstance(n, torch.Tensor):
+                    try:
+                        val = n.item()
+                    except Exception:
+                        val = n.tolist()
+                    s = str(val)
+                elif isinstance(n, (bytes, bytearray)):
+                    s = n.decode("utf-8", errors="replace")
+                elif n is None:
+                    s = f"{fallback_prefix}_{i}"
+                else:
+                    s = str(n)
+            except Exception:
+                s = f"{fallback_prefix}_{i}"
+            out.append(s.strip())
+        return out
+
     def collate_fn(self, batch):
-        seqs, ys = zip(*batch)
+        seqs, ys, names = zip(*batch)
         seps_spaced = [" ".join(list(s)) for s in seqs]  # formato in cui ProtBert prende gli input
 
         enc = self.tokenizer(
@@ -50,7 +73,8 @@ class QmeanDataModule(pl.LightningDataModule):
             return_tensors="pt"
         )
         y = torch.stack(ys)
-        return enc["input_ids"], enc["attention_mask"], y
+        norm_names = self._normalize_names(names)
+        return enc["input_ids"], enc["attention_mask"], y , norm_names
 
     def train_dataloader(self):
         return DataLoader(self.train_ds, batch_size=self.batch_size,

@@ -61,4 +61,11 @@ class QmeanDataset(Dataset):
         x = row["sequence"][0]
         y = torch.tensor(row["avg_local_score"][0])
 
-        return x, y
+        if "name" in row and row["name"]:
+            name = row["name"][0]
+        elif "id" in row and row["id"]:
+            name = row["id"][0]
+        else:
+            name = str(idx)
+
+        return x, y , name

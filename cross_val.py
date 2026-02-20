@@ -24,12 +24,56 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def train(model, datamodule, model_prefix, project, entity, offline, group, patience, k, max_epochs, min_delta,
-          lr_log_interval, devices , default_root_dir,):
+def build_global_scores(scores_dir: str, scores_file: str = "scores.csv", out_file: str = "global_scores.csv") -> str:
+    scores_path = os.path.join(scores_dir, scores_file)
+    if not os.path.exists(scores_path):
+        raise FileNotFoundError(f"There's no file`scores.csv` in `scores_dir`: {scores_path}")
+
+    df = pd.read_csv(scores_path)
+
+    required = {"protein_name", "pred", "mae"}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"Missing columuns in `scores.csv`: {sorted(missing)}")
+
+    if "model" not in df.columns:
+        df["model"] = "unknown"
+    if "qmean" not in df.columns:
+        df["qmean"] = pd.NA
+
+    for col in ("pred", "mae"):
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    df["protein_name"] = df["protein_name"].astype(str).str.strip()
+
+    grouped = (
+        df.groupby(["protein_name"], dropna=False)
+        .agg(
+            pred=("pred", "mean"),
+            qmean=("qmean", lambda s: s.dropna().iloc[0] if s.dropna().shape[0] else pd.NA),
+            mae=("mae", "mean"),
+            mae_std=("mae", "std"),
+        )
+        .reset_index()
+    )
+
+    # se una proteina appare una sola volta, std = NaN -> 0.0
+    grouped["mae_std"] = grouped["mae_std"].fillna(0.0)
+
+    out_path = os.path.join(scores_dir, out_file)
+    grouped.to_csv(out_path, index=False)
+    return out_path
+
+
+def train(model, datamodule,
+          model_prefix, project,
+          entity, offline, group, patience, k,
+          max_epochs, min_delta,
+          lr_log_interval, devices, default_root_dir):
     callbacks = [
         LearningRateMonitor(logging_interval=lr_log_interval),
         EarlyStopping(
-            monitor='val_loss',
+            monitor='val/loss',
             patience=patience,
             min_delta=min_delta,
             verbose=False,
@@ -37,7 +81,7 @@ def train(model, datamodule, model_prefix, project, entity, offline, group, pati
         ),
         ModelCheckpoint(
             filename=f"{model_prefix}-fold-{k + 1}-{{epoch:02d}}-{{val_loss:.2f}}",
-            monitor='val_loss',
+            monitor='val/loss',
             mode='min',
             save_top_k=1,
         )
@@ -59,7 +103,7 @@ def train(model, datamodule, model_prefix, project, entity, offline, group, pati
         devices=devices,
     )
 
-    trainer.fit(model, datamodule=datamodule)
+    trainer.fit(model=model, datamodule=datamodule)
     wandb.finish()
 
     return trainer.logger.experiment.id
@@ -87,8 +131,14 @@ def main(args):
         logger.info(f"[Fold {k + 1}/{args.k}] Starting training and evaluation...")
         logger.info("=" * 80)
 
-        train_split, test_split = train_test_split(df, args.split, test_size=args.split[2], random_state=args.seed + k)
-        train_split, val_split = train_test_split(df, args.split, test_size=args.split[1] / args.split[0],
+        train_pct, val_pct, test_pct = args.split
+
+        train_frac = train_pct / 100.0
+        val_frac = val_pct / 100.0
+        test_frac = test_pct / 100.0
+
+        train_split, test_split = train_test_split(df, test_size=test_frac, random_state=args.seed + k)
+        train_split, val_split = train_test_split(df, test_size=val_frac / (train_frac + val_frac),
                                                   random_state=args.seed + k)
 
         unique_id = time.time()
@@ -104,8 +154,12 @@ def main(args):
         val_split.to_csv(val_path, index=False)
         test_split.to_csv(test_path, index=False)
 
-        datamodule = QmeanDataModule(train_path, val_path, test_path, args.parquet_dir, args.batch_size,
-                                     args.num_workers, args.tokenizer, args.max_sequence_len)
+        args.parquet_dir = os.path.join(data_dir, "parquet_shards")
+
+        datamodule = QmeanDataModule(train_path=train_path, val_path=val_path, test_path=test_path,
+                                     parquet_dir=args.parquet_dir, batch_size=args.batch_size,
+                                     num_workers=args.num_workers, tokenizer=args.tokenizer,
+                                     max_sequence_len=args.max_sequence_len)
         model = ProtBerQmean(args.lr, args.weight_decay, args.model_name, args.freeze_bert, args.dropout,
                              args.n_regressor_layers)
 
@@ -115,30 +169,33 @@ def main(args):
                               entity=args.entity, offline=args.offline,
                               group=args.group, patience=args.patience, min_delta=args.min_delta, k=k,
                               lr_log_interval=args.lr_logging_interval, devices=args.devices,
-                              max_epochs=args.max_epochs, defaul_root_dir=args.default_root_dir,
-                              )
+                              max_epochs=args.max_epochs, default_root_dir=args.default_root_dir)
 
         logger.info(f"[Fold {k + 1}/{args.k}] QmeanNet Training Ended...")
 
         logger.info(f"[Fold {k + 1}/{args.k}] QmeanNet Starting Testing...")
 
         # get last model checkpoint from the current run
-        ckpt_dir = os.path.join(args.rpn_default_root_dir, experiment_id, "checkpoints")  # noqa
+        ckpt_dir = os.path.join(args.default_root_dir, experiment_id, "checkpoints")  # noqa
         ckpt_path = [os.path.join(ckpt_dir, ckpt) for ckpt in os.listdir(ckpt_dir) if ckpt.endswith(".ckpt")][
             -1]  # noqa
 
         cmd = [
             "python", "test.py",
             "--seed", str(args.seed),
-            "--batch_size", str(args.rpn_batch_size),
+            "--batch_size", str(args.batch_size),
+            "--test_path", test_path,
+            "--parquet_dir", args.parquet_dir,
+            "--tokenizer", args.tokenizer,
             "--ckpt_path", ckpt_path,
             "--model_name", f"{args.model_prefix}-{k + 1}-fold",
             "--scores_dir", "./_qmean_scores",
             "--scores_file", "scores.csv",
         ]
 
-
         subprocess.run(cmd, check=True)
+
+    build_global_scores(scores_dir="./_qmean_scores", scores_file="scores.csv", out_file="global_scores.csv")
 
 
 if __name__ == "__main__":
@@ -154,22 +211,22 @@ if __name__ == "__main__":
     parser.add_argument("--batch-size", type=int, default=256, help="Batch size for dataloaders")
     parser.add_argument("--num-workers", type=int, default=8, help="Number of workers for dataloaders")
     parser.add_argument("--max-sequence-len", type=int, default=512, help="Maximum sequence length for tokenizer")
-    parser.add_argument("--csv_path", type=str, default="qmean_global_scores_clean-.csv", help="Path to the csv file")
+    parser.add_argument("--csv_path", type=str, default="qmean_global_scores_clean.csv", help="Path to the csv file")
     parser.add_argument("--tokenizer", type=str, default="Rostlab/prot_bert", help="Model tokenizer")
     parser.add_argument("--model_name", type=str, default="Rostlab/prot_bert", help="Model name")
     parser.add_argument("--parquet_dir", type=str, default="parquet_shards", help="Path to the parquet directory")
 
-    #wandb
+    # wandb
     parser.add_argument("--model-prefix", type=str, default="qmean", help="Prefix per i checkpoint e run name")
-    parser.add_argument("--project", type=str, default="qmean_project", help="WandB project name")
+    parser.add_argument("--project", type=str, default="QMeanNet", help="WandB project name")
     parser.add_argument("--entity", type=str, default=None, help="WandB entity (team/user)")
     parser.add_argument("--offline", action="store_true", help="Launch wandb in offline mode")
     parser.add_argument("--group", type=str, default=None, help="WandB group name")
 
-    #model_parameters
+    # model_parameters
     parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate")
     parser.add_argument("--weight-decay", type=float, default=0.0, help="Weight decay for optimizer")
-    parser.add_argument("--freeze-bert", action="store_true", help="Freeze BERT encoder weights")
+    parser.add_argument("--freeze-bert", action="store_false", help="Freeze BERT encoder weights")
     parser.add_argument("--dropout", type=float, default=0.1, help="Dropout rate for the model")
     parser.add_argument("--n-regressor-layers", type=int, default=1, help="Number of regressor layers")
 
@@ -180,5 +237,6 @@ if __name__ == "__main__":
 
     parser.add_argument("--devices", type=int, default=1, help="Number of devices for Trainer")
     parser.add_argument("--max-epochs", type=int, default=50, help="Maximum number of training epochs")
-    parser.add_argument("--default-root-dir", type=str, default=".", help="Root dir for Trainer outputs")
+    parser.add_argument("--default-root-dir", type=str, default="./QMeanNet", help="Root dir for Trainer outputs")
 
+    main(parser.parse_args())
