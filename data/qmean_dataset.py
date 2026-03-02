@@ -1,9 +1,21 @@
+import glob
+import pickle
+from pathlib import Path
+import pandas as pd
+import networkx as nx
 import pyarrow.parquet as pq
 import os
 import torch
+import shutil
 from logging import getLogger
 import dask.dataframe as dd
+import graphein.molecule as gm
+from graphein.ml import GraphFormatConvertor
+from rdkit import Chem
+from rdkit.Chem import PropertyMol
+from torch_geometric.data import Dataset as GraphDataset
 from torch.utils.data import (Dataset)
+from torch_geometric.utils import from_networkx
 
 logger = getLogger(__name__)
 class QmeanDataset(Dataset):
@@ -69,3 +81,80 @@ class QmeanDataset(Dataset):
             name = str(idx)
 
         return x, y , name
+
+
+
+class QmeanGraphDataset(GraphDataset):
+        def __init__(self, root, transform=None, pre_transform=None, pre_filter=None, target_csv: str | None = None):
+            self.targets = None
+            if target_csv is not None:
+                df = pd.read_csv(target_csv)
+                self.targets = dict(zip(df['name'], df['avg_local_score']))
+            super().__init__(root, transform, pre_transform, pre_filter)
+
+        @property
+        #file che vengono controllati per vedere se far partire il download
+        def raw_file_names(self):
+            return list(glob.glob(os.path.join(self.root, "*.p2smi")))
+
+        @property
+        #after processing
+        def processed_file_names(self):
+            return list(glob.glob(os.path.join(self.processed_dir, "*.pt")))
+
+
+        def process(self):
+            # Read data into huge `Data` list.
+            #ggiungere splitting dei grafi
+            for idx, file in enumerate(os.listdir(self.root)):
+                if not file.endswith(".p2smi"):
+                    continue
+                with open(os.path.join(self.root , file)) as f:
+                    data = f.read()
+
+                data = data.split(": ")
+                data = data[1]
+
+                config = gm.MoleculeGraphConfig()
+                nx_graph = gm.construct_graph(smiles=data, config=config)
+                #restituisce non un grafo pyg ma nx
+
+                convertor = GraphFormatConvertor(src_format="nx", dst_format="pyg")
+                pyg_graph = convertor(nx_graph)
+
+
+                # attach target by substring match between CSV name and file stem
+                target_value = None
+                if self.targets is not None:
+                    namefile = Path(file).stem
+                    for name , score in self.targets.items():
+                        if name in namefile:
+                            target_value = score
+                            break
+                    if target_value is not None:
+                        pyg_graph.y = torch.tensor([float(target_value)])
+                    else:
+                        logger.warning("Target not found for %s", namefile)
+
+                if self.pre_filter is not None:
+                    pyg_graph = self.pre_filter(pyg_graph)
+
+                if self.pre_transform is not None:
+                    pyg_graph = self.pre_transform(pyg_graph)
+
+                torch.save(pyg_graph, os.path.join(self.processed_dir , str(idx) + ".pt"))
+
+        def __len__(self):
+            return len(self.processed_file_names)
+
+        def __getitem__(self, idx):
+            data = torch.load(os.path.join(self.processed_dir , str(idx) +".pt"), weights_only=False)
+            return data
+
+if __name__ == "__main__":
+    qmean_graph_dataset = QmeanGraphDataset(root="/Users/davidedelfranconatale/QmeanNet/paolos" , target_csv="../qmean_global_scores_clean.csv")
+
+    print(qmean_graph_dataset.__getitem__(0))
+
+    for idx, data in enumerate(qmean_graph_dataset):
+        print(qmean_graph_dataset.__getitem__(idx).y)

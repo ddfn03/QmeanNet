@@ -1,13 +1,14 @@
 import logging
-from os import name
 from typing import Iterable, Optional, List
 
 import lightning as pl
 import torch
 from torch.utils.data import DataLoader
+from torch_geometric.loader import DataLoader as GraphDataLoader
 from transformers import AutoTokenizer
 
 from .qmean_dataset import QmeanDataset
+from .qmean_dataset import QmeanGraphDataset
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +41,7 @@ class QmeanDataModule(pl.LightningDataModule):
         else:
             self.test_ds = QmeanDataset(self.test_path, self.parquet_dir + "/test")
 
-    def _normalize_names(self , names: Iterable, fallback_prefix: Optional[str] = "unknown") -> List[str]:
+    def _normalize_names(self, names: Iterable, fallback_prefix: Optional[str] = "unknown") -> List[str]:
         out: List[str] = []
         for i, n in enumerate(names):
             try:
@@ -74,7 +75,7 @@ class QmeanDataModule(pl.LightningDataModule):
         )
         y = torch.stack(ys)
         norm_names = self._normalize_names(names)
-        return enc["input_ids"], enc["attention_mask"], y , norm_names
+        return enc["input_ids"], enc["attention_mask"], y, norm_names
 
     def train_dataloader(self):
         return DataLoader(self.train_ds, batch_size=self.batch_size,
@@ -87,3 +88,37 @@ class QmeanDataModule(pl.LightningDataModule):
     def test_dataloader(self):
         return DataLoader(self.test_ds, batch_size=self.batch_size,
                           shuffle=False, collate_fn=self.collate_fn, num_workers=self.num_workers)
+
+
+class QmeanGraphDataModule(pl.LightningDataModule):
+    def __init__(self, train_path: str = "_graph_dataset/train", val_path: str = "_graph_dataset/val",
+                 test_path: str = "_graph_dataset/test",
+                 batch_size: int = 4, num_workers: int = 8):
+        super().__init__()
+
+        self.train_path = train_path
+        self.val_path = val_path
+        self.test_path = test_path
+
+        self.train_ds = None
+        self.val_ds = None
+        self.test_ds = None
+
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+
+    def setup(self, stage: str):
+        if stage == "fit":
+            self.train_ds = QmeanGraphDataset(self.train_path)
+            self.val_ds = QmeanGraphDataset(self.val_path)
+        else:
+            self.test_ds = QmeanGraphDataset(self.test_path)
+
+    def train_dataloader(self):
+        return GraphDataLoader(self.train_ds, batch_size=self.batch_size, shuffle=True, num_workers=self.num_workers)
+
+    def val_dataloader(self):
+        return GraphDataLoader(self.val_ds, batch_size=self.batch_size, shuffle=True, num_workers=self.num_workers)
+
+    def test_dataloader(self):
+        return GraphDataLoader(self.test_ds, batch_size=self.batch_size, shuffle=True, num_workers=self.num_workers)
