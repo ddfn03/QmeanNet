@@ -37,10 +37,7 @@ class ProtBerQmean(pl.LightningModule):
 
             hidden_dim = gnn_hidden_dim
 
-
-            self.gcn_convs = nn.ModuleList()
-            self.gcn_convs.append(GCNConv(gnn_in_channels, hidden_dim))
-            
+ 
             self.gcn_blocks = nn.ModuleList()
             for i in range(gnn_num_layers - 1):
                 self.gcn_blocks.append(
