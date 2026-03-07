@@ -1,4 +1,5 @@
 import logging
+import os
 from typing import Iterable, Optional, List
 
 import lightning as pl
@@ -7,8 +8,7 @@ from torch.utils.data import DataLoader
 from torch_geometric.loader import DataLoader as GraphDataLoader
 from transformers import AutoTokenizer
 
-from .qmean_dataset import QmeanDataset
-from .qmean_dataset import QmeanGraphDataset
+from .qmean_dataset import QmeanDataset, QmeanGraphDataset, QmeanGraphProcessedDataset
 
 logger = logging.getLogger(__name__)
 
@@ -91,14 +91,37 @@ class QmeanDataModule(pl.LightningDataModule):
 
 
 class QmeanGraphDataModule(pl.LightningDataModule):
-    def __init__(self, train_path: str = "_graph_dataset/train", val_path: str = "_graph_dataset/val",
-                 test_path: str = "_graph_dataset/test",
-                 batch_size: int = 4, num_workers: int = 8):
+    """
+    DataModule per i grafi che:
+    - costruisce tutti i grafi in `root/processed/*.pt` usando QmeanGraphDataset
+    - effettua lo splitting in train/val/test creando:
+        root/processed/train/*.pt
+        root/processed/val/*.pt
+        root/processed/test/*.pt
+      (file disgiunti tra loro)
+    - usa QmeanGraphProcessedDataset per caricare le tre split.
+    """
+
+    def __init__(
+        self,
+        root: str = "_graph_dataset",
+        target_csv: Optional[str] = None,
+        batch_size: int = 4,
+        num_workers: int = 8,
+        train_fraction: float = 0.8,
+        val_fraction: float = 0.1,
+        test_fraction: float = 0.1,
+        seed: int = 42,
+    ):
         super().__init__()
 
-        self.train_path = train_path
-        self.val_path = val_path
-        self.test_path = test_path
+        self.root = root
+        self.target_csv = target_csv
+
+        self.train_fraction = train_fraction
+        self.val_fraction = val_fraction
+        self.test_fraction = test_fraction
+        self.seed = seed
 
         self.train_ds = None
         self.val_ds = None
@@ -107,12 +130,106 @@ class QmeanGraphDataModule(pl.LightningDataModule):
         self.batch_size = batch_size
         self.num_workers = num_workers
 
+    def _prepare_splits(self) -> str:
+        """
+        Costruisce, se necessario, tutti i grafi in `root/processed`,
+        poi li suddivide in:
+            root/processed/train
+            root/processed/val
+            root/processed/test
+        restituendo il path di `processed_dir`.
+        """
+        base_ds = QmeanGraphDataset(self.root, target_csv=self.target_csv)
+        processed_dir = base_ds.processed_dir
+
+        train_dir = os.path.join(processed_dir, "train")
+        val_dir = os.path.join(processed_dir, "val")
+        test_dir = os.path.join(processed_dir, "test")
+
+        # Se le cartelle di split esistono già con dei .pt, non facciamo nulla.
+        train_exists = os.path.isdir(train_dir) and any(
+            f.endswith(".pt") for f in os.listdir(train_dir)
+        )
+        val_exists = os.path.isdir(val_dir) and any(
+            f.endswith(".pt") for f in os.listdir(val_dir)
+        )
+        test_exists = os.path.isdir(test_dir) and any(
+            f.endswith(".pt") for f in os.listdir(test_dir)
+        )
+
+        if train_exists and val_exists and test_exists:
+            return processed_dir
+
+        # Prendiamo tutti i .pt direttamente in processed/ (non nelle sottocartelle)
+        all_files = [
+            os.path.join(processed_dir, f)
+            for f in os.listdir(processed_dir)
+            if f.endswith(".pt") and os.path.isfile(os.path.join(processed_dir, f))
+        ]
+
+        if not all_files:
+            logger.warning(
+                "Nessun file .pt trovato in %s per creare gli split. "
+                "Assicurati che QmeanGraphDataset abbia processato i grafi.",
+                processed_dir,
+            )
+            return processed_dir
+
+        n = len(all_files)
+        # Shuffle deterministico
+        g = torch.Generator()
+        g.manual_seed(self.seed)
+        perm = torch.randperm(n, generator=g).tolist()
+
+        n_train = int(n * self.train_fraction)
+        n_val = int(n * self.val_fraction)
+        # il resto va al test
+        n_test = n - n_train - n_val
+
+        train_idx = perm[:n_train]
+        val_idx = perm[n_train : n_train + n_val]
+        test_idx = perm[n_train + n_val :]
+
+        os.makedirs(train_dir, exist_ok=True)
+        os.makedirs(val_dir, exist_ok=True)
+        os.makedirs(test_dir, exist_ok=True)
+
+        def move_subset(indices, dst_dir):
+            for i in indices:
+                src = all_files[i]
+                fname = os.path.basename(src)
+                dst = os.path.join(dst_dir, fname)
+                if os.path.abspath(src) == os.path.abspath(dst):
+                    continue
+                if os.path.exists(dst):
+                    continue
+                os.rename(src, dst)
+
+        move_subset(train_idx, train_dir)
+        move_subset(val_idx, val_dir)
+        move_subset(test_idx, test_dir)
+
+        logger.info(
+            "Creati split grafi: %d train, %d val, %d test in %s",
+            len(train_idx),
+            len(val_idx),
+            len(test_idx),
+            processed_dir,
+        )
+
+        return processed_dir
+
     def setup(self, stage: str):
+        processed_dir = self._prepare_splits()
+        train_dir = os.path.join(processed_dir, "train")
+        val_dir = os.path.join(processed_dir, "val")
+        test_dir = os.path.join(processed_dir, "test")
+
         if stage == "fit":
-            self.train_ds = QmeanGraphDataset(self.train_path)
-            self.val_ds = QmeanGraphDataset(self.val_path)
+            self.train_ds = QmeanGraphProcessedDataset(train_dir)
+            self.val_ds = QmeanGraphProcessedDataset(val_dir)
         else:
-            self.test_ds = QmeanGraphDataset(self.test_path)
+            self.test_ds = QmeanGraphProcessedDataset(test_dir)
 
     def train_dataloader(self):
         return GraphDataLoader(self.train_ds, batch_size=self.batch_size, shuffle=True, num_workers=self.num_workers)

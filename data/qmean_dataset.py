@@ -6,6 +6,7 @@ import networkx as nx
 import pyarrow.parquet as pq
 import os
 import torch
+import torch.nn.functional as F
 import shutil
 from logging import getLogger
 import dask.dataframe as dd
@@ -13,8 +14,9 @@ import graphein.molecule as gm
 from graphein.ml import GraphFormatConvertor
 from rdkit import Chem
 from rdkit.Chem import PropertyMol
+from torch_geometric.data import Data
 from torch_geometric.data import Dataset as GraphDataset
-from torch.utils.data import (Dataset)
+from torch.utils.data import Dataset
 from torch_geometric.utils import from_networkx
 
 logger = getLogger(__name__)
@@ -117,13 +119,28 @@ class QmeanGraphDataset(GraphDataset):
 
                 config = gm.MoleculeGraphConfig()
                 nx_graph = gm.construct_graph(smiles=data, config=config)
-                #restituisce non un grafo pyg ma nx
-
-                convertor = GraphFormatConvertor(src_format="nx", dst_format="pyg")
+                # Conversione nx -> PyG:
+                convertor = GraphFormatConvertor(
+                    src_format="nx",
+                    dst_format="pyg",
+                    columns=[
+                        "edge_index",
+                        "coords",
+                        "name",
+                        "node_id",
+                        "atom_type_one_hot",
+                    ],
+                )
                 pyg_graph = convertor(nx_graph)
+                # Costruiamo data.x a partire da atom_type_one_hot (tensor float)
+                pyg_graph.x = torch.as_tensor(
+                    pyg_graph.atom_type_one_hot, dtype=torch.float
+                )
+                # Rimuoviamo l'attributo ridondante per avere un Data "pulito"
+                if hasattr(pyg_graph, "atom_type_one_hot"):
+                    del pyg_graph.atom_type_one_hot
 
 
-                # attach target by substring match between CSV name and file stem
                 target_value = None
                 if self.targets is not None:
                     namefile = Path(file).stem
@@ -148,8 +165,30 @@ class QmeanGraphDataset(GraphDataset):
             return len(self.processed_file_names)
 
         def __getitem__(self, idx):
-            data = torch.load(os.path.join(self.processed_dir , str(idx) +".pt"), weights_only=False)
+            data = torch.load(os.path.join(self.processed_dir, str(idx) + ".pt"), weights_only=False)
             return data
+
+
+class QmeanGraphProcessedDataset(Dataset):
+    """
+    Dataset semplice che legge i grafi già processati
+    da una sotto-cartella (es. processed/train, processed/val, processed/test).
+    """
+
+    def __init__(self, processed_dir: str):
+        self.processed_dir = processed_dir
+        self.files = sorted(
+            os.path.join(processed_dir, f)
+            for f in os.listdir(processed_dir)
+            if f.endswith(".pt")
+        )
+
+    def __len__(self):
+        return len(self.files)
+
+    def __getitem__(self, idx):
+        data = torch.load(os.path.join(self.processed_dir, str(idx) + ".pt"), weights_only=False)
+        return data
 
 if __name__ == "__main__":
     qmean_graph_dataset = QmeanGraphDataset(root="/Users/davidedelfranconatale/QmeanNet/paolos" , target_csv="../qmean_global_scores_clean.csv")

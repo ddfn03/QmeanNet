@@ -32,9 +32,19 @@ from data.qmean_datamodule import QmeanDataModule
 if __name__ == "__main__":
     torch.set_float32_matmul_precision('high')
 
-    with wandb.init(entity="neurone-lab", project="QmeanNet", id="xegwdar0",  resume="must") as run:
-        LightningCLI(
-            model_class=ProtBerQmean,
-            datamodule_class=QmeanDataModule,
-            save_config_kwargs={"overwrite": True},
-        )
+    from data.qmean_datamodule import QmeanGraphDataModule
+
+    dm = QmeanGraphDataModule(
+        root="paolos",  # cartella con .p2smi
+        target_csv="qmean_global_scores_clean.csv",
+        batch_size=4,
+        train_fraction=0.8,
+        val_fraction=0.1,
+        test_fraction=0.1,
+        seed=42,
+    )
+    dm.setup("fit")
+    batch = next(iter(dm.train_dataloader()))
+    print(batch.x.shape)   # (num_nodi_totale_batch, F)
+
+
