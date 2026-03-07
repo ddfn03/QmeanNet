@@ -20,9 +20,13 @@ from torch.utils.data import Dataset
 from torch_geometric.utils import from_networkx
 
 logger = getLogger(__name__)
-class QmeanDataset(Dataset):
-    def __init__(self, csv_path: str , parquet_dir: str , force_rebuild: bool = False):
 
+
+class QmeanDataset(Dataset):
+    def __init__(self,
+                 csv_path: str,
+                 parquet_dir: str,
+                 force_rebuild: bool = False):
 
         if not os.path.exists(parquet_dir) or force_rebuild:
             logger.info("Creating Parquet Directory...")
@@ -82,91 +86,94 @@ class QmeanDataset(Dataset):
         else:
             name = str(idx)
 
-        return x, y , name
-
+        return x, y, name
 
 
 class QmeanGraphDataset(GraphDataset):
-        def __init__(self, root, transform=None, pre_transform=None, pre_filter=None, target_csv: str | None = None):
-            self.targets = None
-            if target_csv is not None:
-                df = pd.read_csv(target_csv)
-                self.targets = dict(zip(df['name'], df['avg_local_score']))
-            super().__init__(root, transform, pre_transform, pre_filter)
+    def __init__(self,
+                 root,
+                 transform=None,
+                 pre_transform=None,
+                 pre_filter=None,
+                 target_csv: str | None = None):
+        self.targets = None
+        if target_csv is not None:
+            df = pd.read_csv(target_csv)
+            self.targets = dict(zip(df['name'], df['avg_local_score']))
+        super().__init__(root, transform, pre_transform, pre_filter)
 
-        @property
-        #file che vengono controllati per vedere se far partire il download
-        def raw_file_names(self):
-            return list(glob.glob(os.path.join(self.root, "*.p2smi")))
+    @property
+    # file che vengono controllati per vedere se far partire il download
+    def raw_file_names(self):
+        return list(glob.glob(os.path.join(self.root, "*.p2smi")))
 
-        @property
-        #after processing
-        def processed_file_names(self):
-            return list(glob.glob(os.path.join(self.processed_dir, "*.pt")))
+    @property
+    # after processing
+    def processed_file_names(self):
+        return list(glob.glob(os.path.join(self.processed_dir, "*.pt")))
 
+    def process(self):
+        # Read data into huge `Data` list.
+        # TODO: ggiungere splitting dei grafi
+        files_to_process = os.listdir(self.root)
+        for idx, file in enumerate(files_to_process):
+            if not file.endswith(".p2smi"):
+                continue
+            with open(os.path.join(self.root, file)) as f:
+                data = f.read()
 
-        def process(self):
-            # Read data into huge `Data` list.
-            #ggiungere splitting dei grafi
-            for idx, file in enumerate(os.listdir(self.root)):
-                if not file.endswith(".p2smi"):
-                    continue
-                with open(os.path.join(self.root , file)) as f:
-                    data = f.read()
+            data = data.split(": ")
+            data = data[1]
 
-                data = data.split(": ")
-                data = data[1]
+            config = gm.MoleculeGraphConfig()
+            nx_graph = gm.construct_graph(smiles=data, config=config)
+            # Conversione nx -> PyG:
+            convertor = GraphFormatConvertor(
+                src_format="nx",
+                dst_format="pyg",
+                columns=[
+                    "edge_index",
+                    "coords",
+                    "name",
+                    "node_id",
+                    "atom_type_one_hot",
+                ],
+            )
+            pyg_graph = convertor(nx_graph)
+            # Costruiamo data.x a partire da atom_type_one_hot (tensor float)
+            pyg_graph.x = torch.as_tensor(
+                pyg_graph.atom_type_one_hot, dtype=torch.float
+            )
+            # Rimuoviamo l'attributo ridondante per avere un Data "pulito"
+            if hasattr(pyg_graph, "atom_type_one_hot"):
+                del pyg_graph.atom_type_one_hot
 
-                config = gm.MoleculeGraphConfig()
-                nx_graph = gm.construct_graph(smiles=data, config=config)
-                # Conversione nx -> PyG:
-                convertor = GraphFormatConvertor(
-                    src_format="nx",
-                    dst_format="pyg",
-                    columns=[
-                        "edge_index",
-                        "coords",
-                        "name",
-                        "node_id",
-                        "atom_type_one_hot",
-                    ],
-                )
-                pyg_graph = convertor(nx_graph)
-                # Costruiamo data.x a partire da atom_type_one_hot (tensor float)
-                pyg_graph.x = torch.as_tensor(
-                    pyg_graph.atom_type_one_hot, dtype=torch.float
-                )
-                # Rimuoviamo l'attributo ridondante per avere un Data "pulito"
-                if hasattr(pyg_graph, "atom_type_one_hot"):
-                    del pyg_graph.atom_type_one_hot
+            target_value = None
+            if self.targets is not None:
+                namefile = Path(file).stem
+                for name, score in self.targets.items():
+                    if name in namefile:
+                        target_value = score
+                        break
+                if target_value is not None:
+                    pyg_graph.y = torch.tensor([float(target_value)])
+                else:
+                    logger.warning("Target not found for %s", namefile)
 
+            if self.pre_filter is not None:
+                pyg_graph = self.pre_filter(pyg_graph)
 
-                target_value = None
-                if self.targets is not None:
-                    namefile = Path(file).stem
-                    for name , score in self.targets.items():
-                        if name in namefile:
-                            target_value = score
-                            break
-                    if target_value is not None:
-                        pyg_graph.y = torch.tensor([float(target_value)])
-                    else:
-                        logger.warning("Target not found for %s", namefile)
+            if self.pre_transform is not None:
+                pyg_graph = self.pre_transform(pyg_graph)
 
-                if self.pre_filter is not None:
-                    pyg_graph = self.pre_filter(pyg_graph)
+            torch.save(pyg_graph, os.path.join(self.processed_dir, str(idx) + ".pt"))
 
-                if self.pre_transform is not None:
-                    pyg_graph = self.pre_transform(pyg_graph)
+    def __len__(self):
+        return len(self.processed_file_names)
 
-                torch.save(pyg_graph, os.path.join(self.processed_dir , str(idx) + ".pt"))
-
-        def __len__(self):
-            return len(self.processed_file_names)
-
-        def __getitem__(self, idx):
-            data = torch.load(os.path.join(self.processed_dir, str(idx) + ".pt"), weights_only=False)
-            return data
+    def __getitem__(self, idx):
+        data = torch.load(self.processed_file_names[idx], weights_only=False)
+        return data
 
 
 class QmeanGraphProcessedDataset(Dataset):
@@ -187,11 +194,13 @@ class QmeanGraphProcessedDataset(Dataset):
         return len(self.files)
 
     def __getitem__(self, idx):
-        data = torch.load(os.path.join(self.processed_dir, str(idx) + ".pt"), weights_only=False)
+        data = torch.load(self.files[idx], weights_only=False)
         return data
 
+
 if __name__ == "__main__":
-    qmean_graph_dataset = QmeanGraphDataset(root="/Users/davidedelfranconatale/QmeanNet/paolos" , target_csv="../qmean_global_scores_clean.csv")
+    qmean_graph_dataset = QmeanGraphDataset(root="../paolos",
+                                            target_csv="../qmean_global_scores_clean.csv")
 
     print(qmean_graph_dataset.__getitem__(0))
 
