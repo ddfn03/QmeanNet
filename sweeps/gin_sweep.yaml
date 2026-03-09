@@ -1,0 +1,39 @@
+program: run_qmean_net.py
+project: QmeanNet
+entity: neurone-lab
+name: QmeanNet-GIN-Sweep
+method: bayes
+metric:
+  name: val/loss
+  goal: minimize
+parameters:
+  model.lr:
+    min: 0.0001
+    max: 0.01
+    distribution: log_uniform_values
+  model.weight_decay:
+    min: 0.01
+    max: 0.1
+    distribution: log_uniform_values
+  model.dropout_rate:
+    values: [0.1, 0.2, 0.3, 0.4, 0.5]
+  model.n_regressor_layers:
+    values: [1, 2, 3, 4]
+  model.gnn_hidden_dim:
+    values: [64, 128, 256]
+  model.gnn_num_layers:
+    values: [2, 3, 4]
+
+early_terminate:
+  type: hyperband
+  eta: 3
+  min_iter: 1
+  max_iter: 10
+
+command:
+  - python
+  - ${program}
+  - fit
+  - --config
+  - config_gnn.yaml
+  - ${args}
