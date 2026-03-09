@@ -21,6 +21,14 @@ from torch_geometric.utils import from_networkx
 
 logger = getLogger(__name__)
 
+# File di metadati PyG in processed/: non sono grafi e non vanno in train/val/test
+PROCESSED_META_FILES = frozenset({"pre_filter.pt", "pre_transform.pt"})
+
+
+def _is_data_pt(filename: str) -> bool:
+    """True se il file è un .pt di dato (grafo), non pre_filter/pre_transform."""
+    return filename.endswith(".pt") and filename not in PROCESSED_META_FILES
+
 
 class QmeanDataset(Dataset):
     def __init__(self,
@@ -108,9 +116,21 @@ class QmeanGraphDataset(GraphDataset):
         return list(glob.glob(os.path.join(self.root, "*.p2smi")))
 
     @property
-    # after processing
     def processed_file_names(self):
-        return list(glob.glob(os.path.join(self.processed_dir, "*.pt")))
+        # Solo .pt numerici (0.pt, 1.pt, ...); escludi pre_filter.pt / pre_transform.pt
+        names = [
+            f
+            for f in os.listdir(self.processed_dir)
+            if f.endswith(".pt")
+            and f not in PROCESSED_META_FILES
+            and os.path.isfile(os.path.join(self.processed_dir, f))
+        ]
+        # Ordine per indice numerico
+        def _key(f):
+            base = f.replace(".pt", "")
+            return int(base) if base.isdigit() else -1
+
+        return [os.path.join(self.processed_dir, f) for f in sorted(names, key=_key)]
 
     def process(self):
         # Read data into huge `Data` list.
@@ -187,7 +207,7 @@ class QmeanGraphProcessedDataset(Dataset):
         self.files = sorted(
             os.path.join(processed_dir, f)
             for f in os.listdir(processed_dir)
-            if f.endswith(".pt")
+            if _is_data_pt(f)
         )
 
     def __len__(self):
@@ -199,7 +219,7 @@ class QmeanGraphProcessedDataset(Dataset):
 
 
 if __name__ == "__main__":
-    qmean_graph_dataset = QmeanGraphDataset(root="../paolos",
+    qmean_graph_dataset = QmeanGraphDataset(root="../smiles",
                                             target_csv="../qmean_global_scores_clean.csv")
 
     print(qmean_graph_dataset.__getitem__(0))

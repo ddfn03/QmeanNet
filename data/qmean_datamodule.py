@@ -8,7 +8,13 @@ from torch.utils.data import DataLoader
 from torch_geometric.loader import DataLoader as GraphDataLoader
 from transformers import AutoTokenizer
 
-from .qmean_dataset import QmeanDataset, QmeanGraphDataset, QmeanGraphProcessedDataset
+from .qmean_dataset import (
+    PROCESSED_META_FILES,
+    QmeanDataset,
+    QmeanGraphDataset,
+    QmeanGraphProcessedDataset,
+    _is_data_pt,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -133,38 +139,37 @@ class QmeanGraphDataModule(pl.LightningDataModule):
     def _prepare_splits(self) -> str:
         """
         Costruisce, se necessario, tutti i grafi in `root/processed`,
-        poi li suddivide in:
-            root/processed/train
-            root/processed/val
-            root/processed/test
-        restituendo il path di `processed_dir`.
+        poi li suddivide in train/val/test. I file pre_filter.pt e pre_transform.pt
+        restano solo in processed/ e non vengono spostati.
+        Se train/val/test contengono già grafi .pt, non si rigenera nulla.
         """
-        base_ds = QmeanGraphDataset(self.root, target_csv=self.target_csv)
-        processed_dir = base_ds.processed_dir
-
+        processed_dir = os.path.join(self.root, "processed")
         train_dir = os.path.join(processed_dir, "train")
         val_dir = os.path.join(processed_dir, "val")
         test_dir = os.path.join(processed_dir, "test")
 
-        # Se le cartelle di split esistono già con dei .pt, non facciamo nulla.
-        train_exists = os.path.isdir(train_dir) and any(
-            f.endswith(".pt") for f in os.listdir(train_dir)
-        )
-        val_exists = os.path.isdir(val_dir) and any(
-            f.endswith(".pt") for f in os.listdir(val_dir)
-        )
-        test_exists = os.path.isdir(test_dir) and any(
-            f.endswith(".pt") for f in os.listdir(test_dir)
-        )
+        # Se le tre split esistono già con almeno un .pt dato (esclusi pre_*.pt), non toccare nulla
+        def split_has_data(d: str) -> bool:
+            if not os.path.isdir(d):
+                return False
+            return any(_is_data_pt(f) for f in os.listdir(d))
 
-        if train_exists and val_exists and test_exists:
+        if split_has_data(train_dir) and split_has_data(val_dir) and split_has_data(test_dir):
+            logger.debug("Split train/val/test già presenti, skip process e split.")
             return processed_dir
 
-        # Prendiamo tutti i .pt direttamente in processed/ (non nelle sottocartelle)
+        # Serve (ri)generare i grafi e/o fare lo split: usa QmeanGraphDataset
+        base_ds = QmeanGraphDataset(self.root, target_csv=self.target_csv)
+        processed_dir = base_ds.processed_dir
+        train_dir = os.path.join(processed_dir, "train")
+        val_dir = os.path.join(processed_dir, "val")
+        test_dir = os.path.join(processed_dir, "test")
+
+        # Solo .pt dati in processed/ (escludi pre_filter.pt, pre_transform.pt)
         all_files = [
             os.path.join(processed_dir, f)
             for f in os.listdir(processed_dir)
-            if f.endswith(".pt") and os.path.isfile(os.path.join(processed_dir, f))
+            if _is_data_pt(f) and os.path.isfile(os.path.join(processed_dir, f))
         ]
 
         if not all_files:
@@ -235,7 +240,7 @@ class QmeanGraphDataModule(pl.LightningDataModule):
         return GraphDataLoader(self.train_ds, batch_size=self.batch_size, shuffle=True, num_workers=self.num_workers)
 
     def val_dataloader(self):
-        return GraphDataLoader(self.val_ds, batch_size=self.batch_size, shuffle=True, num_workers=self.num_workers)
+        return GraphDataLoader(self.val_ds, batch_size=self.batch_size, shuffle=False, num_workers=self.num_workers)
 
     def test_dataloader(self):
-        return GraphDataLoader(self.test_ds, batch_size=self.batch_size, shuffle=True, num_workers=self.num_workers)
+        return GraphDataLoader(self.test_ds, batch_size=self.batch_size, shuffle=False, num_workers=self.num_workers)

@@ -20,6 +20,7 @@ qmean_global_scores_clean.csv
 qmean_global_scores.parquet
 _dataset
 _checkpoints
+smiles
 
 # Results
 lightning_logs/
