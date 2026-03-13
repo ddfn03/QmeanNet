@@ -9,12 +9,11 @@ import pandas as pd
 import wandb
 from lightning import Trainer, seed_everything
 from lightning.pytorch.callbacks import LearningRateMonitor, EarlyStopping, ModelCheckpoint
-from scipy.conftest import devices
 from sklearn.model_selection import train_test_split
 from wandb.integration.lightning.fabric import WandbLogger
 
-from data.qmean_datamodule import QmeanDataModule
-from model import ProtBerQmean
+from data.qmean_datamodule import QmeanDataModule, QmeanGraphDataModule
+from model.protbert_qmean import ProtBerQmean
 
 logging.basicConfig(
     level=logging.INFO,
@@ -114,7 +113,11 @@ def main(args):
         raise ValueError("train_split , val_split  and test_split sum must be equal to 100")
 
     logger.info("=" * 80)
-    logger.info(f"Starting Cross-Validation with {args.k} folds - Model: {args.model_prefix}")
+    gnn_mode = args.gnn_type is not None and args.gnn_type in ("GCN", "GraphSAGE", "GIN", "GAT")
+    logger.info(
+        "Starting Cross-Validation with %d folds - Model: %s (%s)",
+        args.k, args.model_prefix, f"GNN {args.gnn_type}" if gnn_mode else "BERT",
+    )
 
     seed_everything(args.seed)
     random.seed(args.seed)
@@ -133,35 +136,65 @@ def main(args):
 
         train_pct, val_pct, test_pct = args.split
 
+        # Frazioni normalizzate (riutilizzate per GNN)
         train_frac = train_pct / 100.0
         val_frac = val_pct / 100.0
         test_frac = test_pct / 100.0
 
-        train_split, test_split = train_test_split(df, test_size=test_frac, random_state=args.seed + k)
-        train_split, val_split = train_test_split(df, test_size=val_frac / (train_frac + val_frac),
-                                                  random_state=args.seed + k)
-
         unique_id = time.time()
-
         data_dir = os.path.join(args.data_dir, str(unique_id))
         os.makedirs(data_dir, exist_ok=True)
 
-        train_path = os.path.join(data_dir, "train.csv")
-        val_path = os.path.join(data_dir, "val.csv")
-        test_path = os.path.join(data_dir, "test.csv")
+        if gnn_mode:
+            # Modalità GNN (use_gnn = stringa tipo GCN, GAT, ...): QmeanGraphDataModule si occupa dello split grafi
+            datamodule = QmeanGraphDataModule(
+                root=args.gnn_root,
+                target_csv=args.gnn_target_csv,
+                batch_size=args.batch_size,
+                num_workers=args.num_workers,
+                train_fraction=train_frac,
+                val_fraction=val_frac,
+                test_fraction=test_frac,
+                seed=args.seed + k,
+            )
+            model = ProtBerQmean(
+                args.lr,
+                args.weight_decay,
+                args.model_name,
+                args.freeze_bert,
+                args.dropout,
+                args.n_regressor_layers,
+                use_gnn=args.gnn_type,  # stringa: "GCN", "GraphSAGE", "GIN", "GAT"
+                gnn_in_channels=args.gnn_in_channels,
+                gnn_hidden_dim=args.gnn_hidden_dim,
+                gnn_num_layers=args.gnn_num_layers,
+            )
 
-        train_split.to_csv(train_path, index=False)
-        val_split.to_csv(val_path, index=False)
-        test_split.to_csv(test_path, index=False)
+            # Per il test in modalità GNN usiamo direttamente gnn_root
+            test_path = args.gnn_root
+            args.parquet_dir = None
+        else:
+            # Modalità BERT: logica originale (CSV split)
+            train_split, test_split = train_test_split(df, test_size=test_frac, random_state=args.seed + k)
+            train_split, val_split = train_test_split(df, test_size=val_frac / (train_frac + val_frac),
+                                                      random_state=args.seed + k)
 
-        args.parquet_dir = os.path.join(data_dir, "parquet_shards")
+            train_path = os.path.join(data_dir, "train.csv")
+            val_path = os.path.join(data_dir, "val.csv")
+            test_path = os.path.join(data_dir, "test.csv")
 
-        datamodule = QmeanDataModule(train_path=train_path, val_path=val_path, test_path=test_path,
-                                     parquet_dir=args.parquet_dir, batch_size=args.batch_size,
-                                     num_workers=args.num_workers, tokenizer=args.tokenizer,
-                                     max_sequence_len=args.max_sequence_len)
-        model = ProtBerQmean(args.lr, args.weight_decay, args.model_name, args.freeze_bert, args.dropout,
-                             args.n_regressor_layers)
+            train_split.to_csv(train_path, index=False)
+            val_split.to_csv(val_path, index=False)
+            test_split.to_csv(test_path, index=False)
+
+            args.parquet_dir = os.path.join(data_dir, "parquet_shards")
+
+            datamodule = QmeanDataModule(train_path=train_path, val_path=val_path, test_path=test_path,
+                                         parquet_dir=args.parquet_dir, batch_size=args.batch_size,
+                                         num_workers=args.num_workers, tokenizer=args.tokenizer,
+                                         max_sequence_len=args.max_sequence_len)
+            model = ProtBerQmean(args.lr, args.weight_decay, args.model_name, args.freeze_bert, args.dropout,
+                                 args.n_regressor_layers)
 
         logger.info(f"[Fold {k + 1}/{args.k}] Starting QmeanNet Training...")
 
@@ -180,18 +213,33 @@ def main(args):
         ckpt_path = [os.path.join(ckpt_dir, ckpt) for ckpt in os.listdir(ckpt_dir) if ckpt.endswith(".ckpt")][
             -1]  # noqa
 
+        fold_seed = args.seed + k if gnn_mode else args.seed
         cmd = [
             "python", "test.py",
-            "--seed", str(args.seed),
+            "--seed", str(fold_seed),
             "--batch_size", str(args.batch_size),
-            "--test_path", test_path,
-            "--parquet_dir", args.parquet_dir,
-            "--tokenizer", args.tokenizer,
             "--ckpt_path", ckpt_path,
             "--model_name", f"{args.model_prefix}-{k + 1}-fold",
             "--scores_dir", "./_qmean_scores",
             "--scores_file", "scores.csv",
         ]
+
+        if gnn_mode:
+            cmd += [
+                "--gnn_type", args.gnn_type,
+                "--gnn_root", args.gnn_root,
+                "--gnn_target_csv", args.gnn_target_csv,
+                "--gnn_in_channels", str(args.gnn_in_channels),
+                "--gnn_hidden_dim", str(args.gnn_hidden_dim),
+                "--gnn_num_layers", str(args.gnn_num_layers),
+            ]
+        else:
+            cmd += [
+                "--test_path", test_path,
+                "--parquet_dir", args.parquet_dir,
+                "--tokenizer", args.tokenizer,
+                "--max_sequence_len", str(args.max_sequence_len),
+            ]
 
         subprocess.run(cmd, check=True)
 
@@ -215,6 +263,17 @@ if __name__ == "__main__":
     parser.add_argument("--tokenizer", type=str, default="Rostlab/prot_bert", help="Model tokenizer")
     parser.add_argument("--model_name", type=str, default="Rostlab/prot_bert", help="Model name")
     parser.add_argument("--parquet_dir", type=str, default="parquet_shards", help="Path to the parquet directory")
+
+    # GNN
+    parser.add_argument("--gnn_type", type=str, default=None,
+                        choices=["GCN", "GraphSAGE", "GIN", "GAT"],
+                        help="Use GNN model(specify the type of GNN)")
+    parser.add_argument("--gnn_root", type=str, default="smiles", help="Root directory with graph data (.p2smi)")
+    parser.add_argument("--gnn_target_csv", type=str, default="qmean_global_scores_clean.csv",
+                        help="CSV with targets for graphs")
+    parser.add_argument("--gnn_in_channels", type=int, default=11, help="Node feature dimension (data.x.shape[1])")
+    parser.add_argument("--gnn_hidden_dim", type=int, default=128, help="GNN hidden dimension")
+    parser.add_argument("--gnn_num_layers", type=int, default=2, help="Number of GNN layers")
 
     # wandb
     parser.add_argument("--model-prefix", type=str, default="qmean", help="Prefix per i checkpoint e run name")

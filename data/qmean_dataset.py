@@ -1,23 +1,25 @@
 import glob
 import pickle
 from pathlib import Path
-import pandas as pd
-import networkx as nx
-import pyarrow.parquet as pq
-import os
-import torch
-import torch.nn.functional as F
-import shutil
-from logging import getLogger
+from typing import List, Optional
+
 import dask.dataframe as dd
 import graphein.molecule as gm
+import networkx as nx
+import os
+import pandas as pd
+import pyarrow.parquet as pq
+import shutil
+import torch
+import torch.nn.functional as F
 from graphein.ml import GraphFormatConvertor
+from logging import getLogger
 from rdkit import Chem
 from rdkit.Chem import PropertyMol
 from torch_geometric.data import Data
 from torch_geometric.data import Dataset as GraphDataset
-from torch.utils.data import Dataset
 from torch_geometric.utils import from_networkx
+from torch.utils.data import Dataset
 
 logger = getLogger(__name__)
 
@@ -117,6 +119,9 @@ class QmeanGraphDataset(GraphDataset):
 
     @property
     def processed_file_names(self):
+        # Se la cartella processed non esiste ancora, non ci sono file .pt
+        if not os.path.isdir(self.processed_dir):
+            return []
         # Solo .pt numerici (0.pt, 1.pt, ...); escludi pre_filter.pt / pre_transform.pt
         names = [
             f
@@ -134,7 +139,9 @@ class QmeanGraphDataset(GraphDataset):
 
     def process(self):
         # Read data into huge `Data` list.
-        # TODO: ggiungere splitting dei grafi
+        # Assicura che la cartella processed esista
+        os.makedirs(self.processed_dir, exist_ok=True)
+
         files_to_process = os.listdir(self.root)
         for idx, file in enumerate(files_to_process):
             if not file.endswith(".p2smi"):
@@ -142,11 +149,15 @@ class QmeanGraphDataset(GraphDataset):
             with open(os.path.join(self.root, file)) as f:
                 data = f.read()
 
-            data = data.split(": ")
-            data = data[1]
+            smiles = data.split(": ")[1]
+
+
+            stem = Path(file).stem
+            parts = stem.split("-")
+            graph_name = parts[1] if len(parts) > 1 else stem
 
             config = gm.MoleculeGraphConfig()
-            nx_graph = gm.construct_graph(smiles=data, config=config)
+            nx_graph = gm.construct_graph(smiles=smiles, config=config)
             # Conversione nx -> PyG:
             convertor = GraphFormatConvertor(
                 src_format="nx",
@@ -168,9 +179,12 @@ class QmeanGraphDataset(GraphDataset):
             if hasattr(pyg_graph, "atom_type_one_hot"):
                 del pyg_graph.atom_type_one_hot
 
+            # Nome proteina/grafo per CSV e log
+            pyg_graph.name = graph_name
+
             target_value = None
             if self.targets is not None:
-                namefile = Path(file).stem
+                namefile = graph_name
                 for name, score in self.targets.items():
                     if name in namefile:
                         target_value = score
@@ -198,17 +212,31 @@ class QmeanGraphDataset(GraphDataset):
 
 class QmeanGraphProcessedDataset(Dataset):
     """
-    Dataset semplice che legge i grafi già processati
-    da una sotto-cartella (es. processed/train, processed/val, processed/test).
+    Dataset semplice che legge i grafi già processati da `processed_dir`.
+    Può essere ristretto a un sottoinsieme tramite `files` o `indices`.
     """
 
-    def __init__(self, processed_dir: str):
+    def __init__(
+        self,
+        processed_dir: str,
+        files: Optional[List[str]] = None,
+        indices: Optional[List[int]] = None,
+    ):
         self.processed_dir = processed_dir
-        self.files = sorted(
-            os.path.join(processed_dir, f)
-            for f in os.listdir(processed_dir)
-            if _is_data_pt(f)
-        )
+
+        if files is None:
+            base_files = sorted(
+                os.path.join(processed_dir, f)
+                for f in os.listdir(processed_dir)
+                if _is_data_pt(f)
+            )
+        else:
+            base_files = list(files)
+
+        if indices is not None:
+            self.files = [base_files[i] for i in indices]
+        else:
+            self.files = base_files
 
     def __len__(self):
         return len(self.files)
@@ -219,8 +247,10 @@ class QmeanGraphProcessedDataset(Dataset):
 
 
 if __name__ == "__main__":
-    qmean_graph_dataset = QmeanGraphDataset(root="../smiles",
+    qmean_graph_dataset = QmeanGraphDataset(root="../paolos",
                                             target_csv="../qmean_global_scores_clean.csv")
+
+
 
     print(qmean_graph_dataset.__getitem__(0))
 
