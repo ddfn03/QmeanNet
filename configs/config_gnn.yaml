@@ -8,7 +8,7 @@ trainer:
   logger:
     class_path: lightning.pytorch.loggers.WandbLogger
     init_args:
-      name: qmean-net-gcn-regressor
+      name: qmean-net-gin-regressor
       save_dir: _checkpoints
       version: null
       offline: false
@@ -23,7 +23,7 @@ trainer:
       add_file_policy: mutable
       entity: neurone-lab
       notes: null
-      tags: [gnn, gcn]
+      tags: [gnn, gin]
       config: null
       config_exclude_keys: null
       config_include_keys: null
@@ -118,7 +118,7 @@ model:
   model_name: Rostlab/prot_bert
   dropout_rate: 0.3
   n_regressor_layers: 2
-  use_gnn: GCN
+  use_gnn: GIN
   gnn_in_channels: 11
   gnn_hidden_dim: 128
   gnn_num_layers: 2

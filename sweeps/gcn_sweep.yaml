@@ -23,6 +23,8 @@ parameters:
     values: [64, 128, 256]
   model.gnn_num_layers:
     values: [2, 3, 4]
+  model.use_gnn:
+    value: GCN
     
 early_terminate:
   type: hyperband
@@ -31,9 +33,12 @@ early_terminate:
   max_iter: 10
 
 command:
-  - python
+  - python3
   - ${program}
   - fit
   - --config
-  - config_gnn.yaml
+  - configs/config_gnn.yaml
+  - --trainer.logger.init_args.name=qmean-net-gcn-regressor
+  - "--trainer.logger.init_args.tags=[gnn, gcn]"
+  - "--trainer.callbacks=[{class_path: lightning.pytorch.callbacks.LearningRateMonitor, init_args: {logging_interval: epoch}}, {class_path: lightning.pytorch.callbacks.EarlyStopping, init_args: {monitor: val/loss, patience: 25, verbose: true, mode: min}}, {class_path: lightning.pytorch.callbacks.ModelCheckpoint, init_args: {dirpath: _checkpoints, filename: 'qmean-net-gcn-regressor-{epoch:02d}-{val_loss:.2f}', monitor: val/loss, save_top_k: 1, mode: min, verbose: true}}]"
   - ${args}
